@@ -391,3 +391,204 @@ mysql > show variables like `%ssl%`;
 配置成功。
 
 *****
+
+### `CMD` 容器启动命令 
+
+用于指定默认的容器主进程的启动命令。
+
+两种格式：
+
+```Dockerfile
+# shell
+CMD <命令>
+# exec
+CMD ["可执行文件","参数1","参数2"]
+# 参数列表格式 在指定了ENTRYPOINT后用CMD指定参数
+CMD ["参数1","参数2"]
+```
+
+首先明确：**容器不是虚拟机而是进程**。因此启动时需要指定运行的文件和所需的参数。
+
+运行时可以指定别的命令来替代默认的命令。比如Ubuntu镜像的默认命令是`/bin/bash`，在容器启动后直接`docker run -it ubuntu`，就会直接进入bash。
+
+启动时指定别的命令，比如`docker run -it ubuntu cat /etc/os-release`，就会在容器启动后输出版本信息。
+
+在指令格式上，一般使用 **`exec`** 格式。这类格式会被解析成JSON数组。如果使用shell格式，实际执行时也会被包装成`sh -c`的参数形式。比如
+
+```Dockerfile
+CMD echo $HOME
+# 会被包装成
+CMD ["sh", "-c", "echo $HOME"]
+```
+
+容器中的应用都应该以**前台执行**，而不是像虚拟机一样用systemd守护进程去启动后台服务，**容器没有后台服务的概念**。
+
+比如起一个nginx这么写：
+```Dockerfile
+CMD service nginx start
+```
+
+容器在执行后会立即退出。因为这条命令会被包装成`CMD ["sh", "-c", "service nginx start"]`，因此**主进程是sh**。当这条命令执行完毕，`sh`作为主进程退出了，容器自然就挂了。
+
+正确的写法是直接运行nginx可执行文件，并要求前台运行：
+
+```Dockerfile
+CMD ["nginx", "-g", "daemon off;"]
+```
+
+*****
+
+### `ENTRYPOINT` 入口点
+
+格式和RUN一样，分为`exec`和`shell`格式。
+
+目的和CMD一样，都是在指定容器启动程序及其参数。在容器运行时可以通过`docker run --entrypoint`参数来指定替代。
+
+*当指定了ENTRYPOINT后，CMD的内容将作为命令的参数传给ENTRYPOINT指令。*
+
+#### 使用场景1：将镜像当成命令行使用
+
+比如需要一个知道自己公网ip的镜像：
+```Dockerfile 
+FROM ubuntu:18.04
+RUN apt-get update \
+    && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
+CMD ["curl", "-ks", "http://myip.ipip.net"]
+```
+
+使用`docker build -t myip .`，直接执行：
+```bash
+docker run myip
+```
+就可以获取当前公网ip。
+
+```bash
+$ docker run myip
+当前 IP：61.148.226.66 来自：中国 北京 北京 联通
+```
+
+如果这时候想加参数，直接在`docker run`命令里加不行，会报可执行文件无法找到的错误：
+```bash 
+$ docker run myip -i
+docker: Error response from daemon: invalid header field value "oci runtime error: container_linux.go:247: starting container process caused \"exec: \\\"-i\\\": executable file not found in $PATH\"\n".
+```
+
+如果需要添加-i参数，需要完整地输入命令：
+
+```bash
+docker run myip curl -kis http://myip.ipip.net
+```
+
+这样太麻烦。而使用`ENTRYPOINT`就可以解决这样的问题。
+
+```Dockerfile
+FROM ubuntu:18.04
+RUN apt-get update \
+    && apt-get install -y curl \
+    && rm -rf /var/lib/apt/lists/*
+ENTRYPOINT [ "curl", "-s", "http://myip.ipip.net" ]
+```
+
+重新制作镜像，再直接使用`docker run myip -i`:
+
+```bash
+$ docker run myip -i
+HTTP/1.1 200 OK
+Server: nginx/1.8.0
+Date: Tue, 22 Nov 2024 05:12:40 CST
+Content-Type: text/html; charset=UTF-8
+Vary: Accept-Encoding
+X-Powered-By: PHP/5.6.24-1~dotdeb+7.1
+X-Cache: MISS from cache-2
+X-Cache-Lookup: MISS from cache-2:80
+X-Cache: MISS from proxy-2_6
+Transfer-Encoding: chunked
+Via: 1.1 cache-2:80, 1.1 proxy-2_6:8006
+Connection: keep-alive
+
+当前 IP：61.148.226.66 来自：中国 北京 北京 联通
+```
+
+成功利用`curl -i`参数输出了响应头的信息。
+
+#### 使用场景2：应用运行前的准备工作
+
+如mysql、redis之类的数据库，在主进程启动之前需要有一些准备。而这些准备和容器CMD无关，无论怎样都需要有这么个准备工作。
+
+此外，还可能启动时不使用root用户以提高安全性等等。
+
+这时候写一个脚本，放到ENRTYPOINT里去执行，而这个脚本会将接到的参数（也就是 `<CMD>`）作为命令，在脚本最后执行。
+
+比如redis的官方镜像中：
+
+```Dockerfile
+FROM alpine:3.4
+...
+RUN addgroup -S redis && adduser -S -G redis redis
+...
+ENTRYPOINT ["docker-entrypoint.sh"]
+
+EXPOSE 6379
+CMD [ "redis-server" ]
+```
+
+这个`docker-entrypoint.sh`的脚本就是redis初始化的脚本。
+
+MySQL也有类似的脚本，可以进入容器中查看：
+
+```bash
+[root@openeuler ~]# docker exec -it mysql-tls /bin/bash
+bash-5.1# ls | grep entrypoint
+docker-entrypoint-initdb.d
+entrypoint.sh
+bash-5.1# cat entrypoint.sh 
+```
+mysql容器中根目录的脚本：entrypoint.sh，链接到`/usr/local/bin/docker-entrypoint.sh`
+
+```shell
+#!/bin/bash
+set -eo pipefail
+shopt -s nullglob
+
+# logging functions
+mysql_log() {
+	local type="$1"; shift
+	# accept argument string or stdin
+	local text="$*"; if [ "$#" -eq 0 ]; then text="$(cat)"; fi
+	local dt; dt="$(date --rfc-3339=seconds)"
+	printf '%s [%s] [Entrypoint]: %s\n' "$dt" "$type" "$text"
+}
+...
+_main() {
+	# if command starts with an option, prepend mysqld
+	if [ "${1:0:1}" = '-' ]; then
+		set -- mysqld "$@"
+	fi
+...
+}
+...
+# If we are sourced from elsewhere, don't perform any further actions
+if ! _is_sourced; then
+	_main "$@"
+fi
+```
+
+使用`docker inspect`查看镜像启动命令：
+
+```bash
+   ...
+   "Cmd": [
+      "mysqld"
+   ],
+   ...
+   "Entrypoint": [
+      "docker-entrypoint.sh"
+   ],
+   ...
+```
+
+最后将`mysqld`作为参数传进了`docker-entrypoint.sh`脚本。
+
+******
+
