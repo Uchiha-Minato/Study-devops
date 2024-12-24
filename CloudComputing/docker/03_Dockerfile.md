@@ -365,7 +365,7 @@ mysql-tls       8.0.40    dc15c361acfc   4 hours ago     591MB
 mysql           8.0.40    6c55ddbef969   2 months ago    591MB
 
 # 启动容器
-docker run -d -p 3306:3306 --name mysql-tls mysql-tls:8.0.40 
+docker run -d -p 3306:3306 --name mysql-tls --restart always -v ~/mysql/log:/var/log/mysql -v ~/mysql/data:/var/lib/mysql  mysql-tls:8.0.40
 
 # 查看容器
 [root@openeuler mysql-server-tls]# docker ps -a
@@ -591,4 +591,169 @@ fi
 最后将`mysqld`作为参数传进了`docker-entrypoint.sh`脚本。
 
 ******
+
+### `ARG` 构建参数
+
+定义参数名称及其默认值，默认值可以使用`docker build --build-arg <参数名>=<值>`来覆盖。
+
+格式：
+
+```Dockerfile
+ARG <参数名>[=默认值]
+```
+
+与`ENV`的效果一样，都是设置环境变量。不同的地方在于`ARG`所定义的环境变量在容器运行时不会存在这些环境变量，但`docker history`还是可以看到所有信息。
+
+ARG指令有生效范围。如果在FROM之前指定，那只能用于FROM指令中。
+
+```Dockerfile
+ARG DOCKER_USERNAME=library
+
+FROM ${DOCKER_USERNAME}/alpine
+
+RUN set -x ; echo ${DOCKER_USERNAME}
+```
+
+以上RUN指令无法输出`${DOCKER_USERNAME}`环境变量的值，若要输出必须再次指定：
+
+```Dockerfile
+ARG DOCKER_USERNAME=library
+
+FROM ${DOCKER_USERNAME}/alpine
+
+ARG DOCKER_USERNAME=library
+
+RUN set -x ; echo ${DOCKER_USERNAME}
+```
+
+对于下面这个Dockerfile，两个`FROM`都能使用`${DOCKER_USERNAME}`，但是对于在各个阶段中使用的变量都必须在每个阶段分别指定：
+
+```Dockerfile
+ARG DOCKER_USERNAME=library
+
+FROM ${DOCKER_USERNAME}/alpine
+
+# 在FROM 之后使用变量，必须在每个阶段分别指定
+ARG DOCKER_USERNAME=library
+
+RUN set -x ; echo ${DOCKER_USERNAME}
+
+FROM ${DOCKER_USERNAME}/alpine
+
+# 在FROM 之后使用变量，必须在每个阶段分别指定
+ARG DOCKER_USERNAME=library
+
+RUN set -x ; echo ${DOCKER_USERNAME}
+```
+
+******
+
+### `VOLUME` 定义匿名卷
+
+用于默认挂载存储卷。
+
+格式：
+```Dockerfile
+VOLUME ["路径1", "路径2",...]
+VOLUME <路径>
+```
+
+容器运行时应该尽量保持**容器存储层不发生写操作**，对于数据库类需要保存动态数据的应用，其数据库文件应该保存于卷(`volume`)中。
+
+```Dockerfile
+VOLUME /data
+```
+
+容器运行时可以使用`docker run -v <本地路径>:/data`覆盖这个存储卷。
+
+使用`docker inspect mysql:8.0.40`命令查看MySQL镜像的默认卷：
+
+```bash
+"Volumes": {
+   "/var/lib/mysql": {}
+},
+```
+
+即MySQL的所有数据都在这个卷里。在容器启动时使用`docker run -v <本地路径>:/var/lib/mysql`将这个卷挂载出来以实现数据持久化。
+
+挂载成功后，无论容器是删除还是重启，数据都不会丢失。
+
+****
+
+### `EXPOSE` 声明端口
+
+格式
+```Dockerfile
+EXPOSE <端口1> [<端口2>...]
+```
+
+声明容器运行时提供服务的端口，**这只是一个声明**，在容器运行时并不会因为这个声明应用就会开启这个端口的服务。
+
+要将 EXPOSE 和在运行时使用 `-p <宿主端口>:<容器端口>` 区分开来。`-p`是映射宿主端口和容器端口，将容器的对应端口服务公开给外界访问，而 EXPOSE 仅仅是声明容器打算使用什么端口而已，并不会自动在宿主进行端口映射。
+
+****
+
+### `WORKDIR` 指定工作目录
+
+格式
+```Dockerfile
+WORKDIR <工作目录路径>
+```
+
+使用 WORKDIR 指令可以来指定工作目录（或者称为**当前目录**），这条指令之后各层的当前目录就被改为指定的目录，如该目录不存在，`WORKDIR` 会自动建立目录。
+
+如果`WORKDIR`使用相对路径，所切换的路径与之前的工作目录有关。
+
+```Dockerfile
+WORKDIR /a
+
+WORKDIR b
+WORKDIR c
+
+RUN pwd
+```
+
+最后`RUN pwd`的路径是`/a/b/c`。
+
+****
+
+### `USER` 指定当前用户
+
+格式
+```Dockerfile 
+USER <用户名>[:<用户组>]
+```
+
+USER 指令和 WORKDIR 相似，都是改变环境状态并影响以后的层。
+
+USER 改变之后层的执行 RUN, CMD 以及 ENTRYPOINT 这类命令的身份。
+
+**USER 只是切换到指定用户而已，这个用户必须是事先建立好的，否则无法切换。**
+
+```Dockerfile
+RUN groupadd -r redis && useradd -r -g redis redis
+USER redis
+RUN [ "redis-server" ]
+```
+
+****
+
+### `LABEL` 为镜像添加元数据
+
+形式为键值对。
+
+```Dockerfile
+LABEL <key>=<value> <key>=<value> <key>=<value> ...
+```
+
+比如声明镜像作者，文档地址等。
+
+```Dockerfile
+LABEL org.opencontainers.image.authors="yeasy"
+
+LABEL org.opencontainers.image.documentation="https://yeasy.gitbooks.io"
+```
+
+****
+
 
