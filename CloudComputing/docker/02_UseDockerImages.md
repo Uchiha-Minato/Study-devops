@@ -169,3 +169,24 @@ nginx         1.23.2              ac8efec875ce   2 years ago     142MB
 不过，上述行为对于镜像的操作都是黑箱操作，生成的镜像也叫*黑箱镜像*。且如果仅用`docker commit`修改，每修改一次就添加一层，会使得镜像越来越臃肿。
 
 因此需要定制镜像还需使用`Dockerfile`。
+
+## 导出/导入镜像
+
+`docker save`将一个或多个镜像文件打包成归档文件。
+
+
+```bash
+docker save [-o <filename>] <image> [image...]
+
+# 比如
+docker save -o mysql-8040.tar mysql:8.0.40
+```
+
+`docker load`通过归档文件或标准输入导入镜像。
+
+```bash
+docker load [-i <filename>]
+
+# 比如
+docker load -i mysql-8040.tar
+```
