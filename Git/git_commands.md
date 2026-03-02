@@ -158,3 +158,26 @@ git log [选项] [分支名/提交hash]
 - `-n <number>` 限制显示log多少条
 - `--since="2024-01-01"` 显示自指定日期之后的提交
 - `--until="2024-07-01"` 显示指定日期之前的提交
+
+## 本地有未提交的更新，但是需要拉取远程分支代码
+
+例如本地分支有 feature-minato 和 dev-temp，feature-minato中有未提交的更新，需要合并dev-temp的最新代码到feature-minato分支
+
+```bash
+git branch
+# 现在在feature-minato分支上
+
+git stash push -m "暂存"
+
+git checkout dev-temp
+
+git pull
+
+git checkout -
+
+git merge --no-commit dev-temp
+
+#有冲突则解决冲突
+
+git stash pop
+```
